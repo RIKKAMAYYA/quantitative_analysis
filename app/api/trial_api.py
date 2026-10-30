@@ -173,7 +173,8 @@ def api_watchlist_search():
     if len(query) < 2:
         return jsonify({'code': 400, 'message': 'q 参数至少 2 个字符', 'data': None}), 400
     try:
-        limit = min(20, max(1, int(request.args.get('limit', 10))))
+        # 上限 50：上游「红利低波」实测 38 条，20 会腰斩（用户反馈 2026-10-30）
+        limit = min(50, max(1, int(request.args.get('limit', 10))))
     except ValueError:
         return jsonify({'code': 400, 'message': 'limit 须为整数', 'data': None}), 400
 

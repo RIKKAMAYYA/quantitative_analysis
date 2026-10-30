@@ -154,10 +154,11 @@ export default function WatchlistPage() {
   const keyword = debouncedInput.trim()
   const searchQuery = useQuery({
     queryKey: ['watchlist', 'search', keyword],
-    queryFn: () => fetchWatchlistSearch(keyword, 15),
+    queryFn: () => fetchWatchlistSearch(keyword, 50),
     enabled: keyword.length >= 2,
   })
-  const suggestions = (searchQuery.data?.items ?? []).filter(
+  const rawSuggestions = searchQuery.data?.items ?? []
+  const suggestions = rawSuggestions.filter(
     (item: WatchlistSearchItem) => item.ts_code && !codes.includes(item.ts_code),
   )
 
@@ -237,7 +238,11 @@ export default function WatchlistPage() {
                   <div className="px-3 py-2 text-2xs text-fg-muted">搜索中…</div>
                 ) : suggestions.length === 0 ? (
                   <div className="px-3 py-2 text-2xs text-fg-muted">
-                    {searchQuery.isError ? '搜索失败，稍后再试' : '没有匹配的股票或基金'}
+                    {searchQuery.isError
+                      ? '搜索失败，稍后再试'
+                      : rawSuggestions.length > 0
+                        ? '匹配结果已全部在自选清单中'
+                        : '没有匹配的股票或基金'}
                   </div>
                 ) : (
                   <ul className="max-h-[22rem] overflow-y-auto py-1">
