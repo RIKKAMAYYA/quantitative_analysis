@@ -39,7 +39,7 @@ function OrderTable({ orders }: { orders: PaperOrder[] }) {
         <tbody>
           {orders.map((o) => (
             <tr key={o.order_id} className="border-b border-line/50">
-              <td className="px-3 py-1.5"><StockLink code={o.ts_code} /></td>
+              <td className="px-3 py-1.5"><StockLink code={o.ts_code} name={o.name ?? null} /></td>
               <td className="px-3 py-1.5">
                 <Badge tone={o.side === 'buy' ? 'bull' : 'bear'}>
                   {o.side === 'buy' ? '买入' : '卖出'}
@@ -75,7 +75,7 @@ function PositionTable({ positions }: { positions: PaperPosition[] }) {
         <tbody>
           {positions.map((p) => (
             <tr key={p.ts_code} className="border-b border-line/50">
-              <td className="px-3 py-1.5"><StockLink code={p.ts_code} /></td>
+              <td className="px-3 py-1.5"><StockLink code={p.ts_code} name={p.name ?? null} /></td>
               <td className="num px-3 py-1.5">{p.qty}</td>
               <td className="num px-3 py-1.5">{p.avg_cost.toFixed(3)}</td>
               <td className="num px-3 py-1.5">{p.last_close.toFixed(3)}</td>
@@ -114,7 +114,7 @@ function TradeTable({ trades }: { trades: PaperTrade[] }) {
           {[...trades].reverse().map((t) => (
             <tr key={t.trade_id} className="border-b border-line/50">
               <td className="num px-3 py-1.5">{t.date}</td>
-              <td className="px-3 py-1.5"><StockLink code={t.ts_code} /></td>
+              <td className="px-3 py-1.5"><StockLink code={t.ts_code} name={t.name ?? null} /></td>
               <td className="px-3 py-1.5">
                 <Badge tone={t.side === 'buy' ? 'bull' : 'bear'}>
                   {t.side === 'buy' ? '买入' : '卖出'}

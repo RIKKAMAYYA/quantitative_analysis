@@ -225,6 +225,8 @@ export const scoreMlBased = async (body: { trade_date: string; model_ids: string
 export interface PortfolioPosition {
   id: number
   ts_code: string
+  /** 股票名称（后端名称注册表补全；查不到为 null） */
+  name?: string | null
   position_size: number
   avg_cost: number
   current_price: number | null
@@ -287,6 +289,8 @@ export interface PortfolioTrade {
   id: number
   portfolio_id: string
   ts_code: string
+  /** 股票名称（后端名称注册表补全；查不到为 null） */
+  name?: string | null
   action: 'buy' | 'sell'
   quantity: number
   price: number

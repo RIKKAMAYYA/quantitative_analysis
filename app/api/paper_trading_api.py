@@ -9,6 +9,7 @@ from app.services.paper_trading_service import (
     DEFAULT_TOP_N,
     PaperTradingService,
 )
+from app.services.stock_name_registry import attach_stock_names
 
 paper_trading_bp = Blueprint("paper_trading", __name__)
 
@@ -27,13 +28,21 @@ def _err(message: str, status: int = 400):
 
 @paper_trading_bp.route("/status", methods=["GET"])
 def status():
-    return _ok(_service().status())
+    data = _service().status()
+    # 持仓/挂单行补股票名称（可读性）；注册表异常时原样返回
+    for key in ("positions", "pending_orders", "closed_orders"):
+        if isinstance(data.get(key), list):
+            attach_stock_names(data[key])
+    return _ok(data)
 
 
 @paper_trading_bp.route("/history", methods=["GET"])
 def history():
     limit = request.args.get("limit", default=200, type=int)
-    return _ok(_service().history(limit=max(1, min(limit, 1000))))
+    data = _service().history(limit=max(1, min(limit, 1000)))
+    if isinstance(data.get("trades"), list):
+        attach_stock_names(data["trades"])
+    return _ok(data)
 
 
 @paper_trading_bp.route("/alignment", methods=["GET"])

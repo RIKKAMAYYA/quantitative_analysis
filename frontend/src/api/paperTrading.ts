@@ -4,6 +4,8 @@ import { apiGet, apiPost } from './client'
 
 export interface PaperPosition {
   ts_code: string
+  /** 股票名称（后端名称注册表补全；查不到为 null） */
+  name?: string | null
   qty: number
   avg_cost: number
   last_close: number
@@ -17,6 +19,8 @@ export interface PaperOrder {
   order_id: string
   signal_date: string
   ts_code: string
+  /** 股票名称（后端名称注册表补全；查不到为 null） */
+  name?: string | null
   side: 'buy' | 'sell' | string
   signal_close: number | null
   target_value: number
@@ -30,6 +34,8 @@ export interface PaperTrade {
   trade_id: number
   date: string
   ts_code: string
+  /** 股票名称（后端名称注册表补全；查不到为 null） */
+  name?: string | null
   side: 'buy' | 'sell' | string
   qty: number
   price: number

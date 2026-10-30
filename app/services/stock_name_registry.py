@@ -152,3 +152,16 @@ def get_stock_name_registry() -> StockNameRegistry:
         if _registry is None:
             _registry = StockNameRegistry()
         return _registry
+
+
+def attach_stock_names(rows: List[Dict]) -> List[Dict]:
+    """API 层通用名称补全：注册表异常时原样返回。
+
+    名称是锦上添花（持仓/流水/组合等列表页可读性），不得拖垮行情主链路，
+    因此这里吞掉一切异常并记 debug 日志。
+    """
+    try:
+        return get_stock_name_registry().merge_names(rows)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"[names] 名称补全失败: {exc}")
+        return rows

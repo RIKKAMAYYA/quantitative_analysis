@@ -266,6 +266,7 @@ export default function RtRiskPage() {
                       <thead>
                         <tr>
                           <th>代码</th>
+                          <th>名称</th>
                           <th className="num">数量</th>
                           <th className="num">成本</th>
                           <th className="num">现价</th>
@@ -280,6 +281,7 @@ export default function RtRiskPage() {
                             <td>
                               <code>{p.ts_code}</code>
                             </td>
+                            <td className="text-fg-secondary">{p.name ?? '--'}</td>
                             <td className="num">{p.position_size}</td>
                             <td className="num">{formatNumber(p.avg_cost, 2)}</td>
                             <td className="num">{formatNumber(p.current_price, 2)}</td>

@@ -21,6 +21,13 @@ _state_store = ParquetStateStore()
 _portfolio_repo = PortfolioRepository(_state_store)
 _backtest_repo = BacktestRepository(_state_store)
 
+
+def _attach_names(rows):
+    """持仓/流水行补股票名称（公共实现见 stock_name_registry.attach_stock_names）。"""
+    from app.services.stock_name_registry import attach_stock_names
+
+    return attach_stock_names(rows)
+
 # 创建蓝图
 ml_factor_bp = Blueprint('ml_factor', __name__, url_prefix='/api/ml-factor')
 
@@ -1572,7 +1579,7 @@ def get_portfolio_trades(portfolio_id):
     """交易流水（倒序，默认 200 条）。"""
     try:
         limit = request.args.get('limit', type=int) or 200
-        trades = _portfolio_repo.list_trades(portfolio_id, limit=limit)
+        trades = _attach_names(_portfolio_repo.list_trades(portfolio_id, limit=limit))
         return jsonify({'success': True, 'trades': trades, 'count': len(trades)})
     except Exception as e:
         logger.error(f"读取交易流水失败: {e}")
@@ -1668,7 +1675,7 @@ def get_portfolio_list():
 def get_portfolio_detail(portfolio_id):
     """获取真实投资组合详情"""
     try:
-        positions = _portfolio_repo.list_positions(portfolio_id)
+        positions = _attach_names(_portfolio_repo.list_positions(portfolio_id))
         metrics = _portfolio_repo.calculate_metrics(portfolio_id)
 
         if not positions or not metrics:

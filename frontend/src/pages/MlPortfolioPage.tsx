@@ -228,6 +228,12 @@ export default function MlPortfolioPage() {
     }
   }
 
+  /** 代码→名称映射（持仓行已由后端名称注册表补全；优化结果表复用） */
+  const nameByCode = useMemo(
+    () => Object.fromEntries((detail?.positions ?? []).map((p) => [p.ts_code, p.name ?? null])),
+    [detail],
+  )
+
   const currentWeights = useMemo(() => {
     if (!detail) return {}
     const totalMv = detail.positions.reduce((acc, p) => acc + (p.market_value ?? 0), 0)
@@ -382,6 +388,7 @@ export default function MlPortfolioPage() {
                     <tr>
                       <th>排名</th>
                       <th>代码</th>
+                      <th>名称</th>
                       <th className="num">权重</th>
                       <th style={{ width: 220 }}>分布</th>
                     </tr>
@@ -395,6 +402,7 @@ export default function MlPortfolioPage() {
                         <td>
                           <code>{code}</code>
                         </td>
+                        <td className="text-faint">{nameByCode[code] ?? '--'}</td>
                         <td className="num">{formatPercent(w * 100)}</td>
                         <td>
                           <div className="progress" style={{ height: 6 }}>
@@ -623,6 +631,7 @@ export default function MlPortfolioPage() {
                       <tr>
                         <th>持仓 ID</th>
                         <th>代码</th>
+                        <th>名称</th>
                         <th className="num">权重</th>
                         <th className="num">市值</th>
                         <th className="num">浮动盈亏</th>
@@ -637,6 +646,7 @@ export default function MlPortfolioPage() {
                           <td>
                             <code>{pos.ts_code}</code>
                           </td>
+                          <td className="text-faint">{pos.name ?? '--'}</td>
                           <td className="num">{pos.weight != null ? formatPercent(pos.weight) : '--'}</td>
                           <td className="num">{fmtAmount(pos.market_value)}</td>
                           <td className={`num ${(pos.unrealized_pnl ?? 0) >= 0 ? 'text-up' : 'text-down'}`}>{fmtAmount(pos.unrealized_pnl)}</td>
@@ -752,6 +762,7 @@ export default function MlPortfolioPage() {
                               <th>#</th>
                               <th>日期</th>
                               <th>代码</th>
+                              <th>名称</th>
                               <th>方向</th>
                               <th className="num">数量</th>
                               <th className="num">价格</th>
@@ -768,6 +779,7 @@ export default function MlPortfolioPage() {
                                 <td>
                                   <code>{t.ts_code}</code>
                                 </td>
+                                <td className="text-faint">{t.name ?? '--'}</td>
                                 <td>
                                   <span className={t.action === 'buy' ? 'text-up' : 'text-down'}>
                                     {t.action === 'buy' ? '买入' : '卖出'}
