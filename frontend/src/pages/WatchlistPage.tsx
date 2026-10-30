@@ -1,19 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BellRing, ListPlus, Search, Trash2 } from 'lucide-react'
 import {
   addWatchlistItem,
   checkWatchlistAlerts,
-  fetchQuotes,
-  fetchTickerSearch,
   fetchWatchlist,
   fetchWatchlistAlerts,
+  fetchWatchlistQuotes,
+  fetchWatchlistSearch,
   removeWatchlistItem,
   replaceWatchlist,
   updateWatchlistItem,
-  type QuoteRow,
-  type TickerSearchItem,
   type WatchlistItem,
+  type WatchlistQuoteRow,
+  type WatchlistSearchItem,
 } from '../api/market'
 import { StockLink } from '../components/stock/StockLink'
 import { Card, Delta, EmptyState, PageHeader, SectionTitle, SkeletonRows } from '../components/ui'
@@ -33,16 +34,48 @@ function loadLocalCodes(): string[] {
   }
 }
 
+/** 输入归一：全码（含场外 .OF）与裸 6 位码原样放行，由服务端「股票优先」消歧；
+ *  裸码不再在前端猜后缀（515450 会被猜成 .SZ 的旧 bug，Issue 0001）。 */
 function normalizeCode(input: string): string | null {
   const text = input.trim().toUpperCase()
-  if (/^\d{6}\.(SH|SZ|BJ)$/.test(text)) return text
-  if (/^\d{6}$/.test(text)) {
-    // 按常见规则推断后缀：6 开头沪市，8/4 开头北交所，其余深市
-    if (text.startsWith('6')) return `${text}.SH`
-    if (text.startsWith('8') || text.startsWith('4')) return `${text}.BJ`
-    return `${text}.SZ`
-  }
+  if (/^\d{6}\.(SH|SZ|BJ|OF)$/.test(text)) return text
+  if (/^\d{6}$/.test(text)) return text
   return null
+}
+
+const ASSET_TYPE_LABEL: Record<string, string> = {
+  stock: '股票',
+  'fund-etf': 'ETF',
+  'fund-lof': 'LOF',
+  'fund-otc': '场外',
+}
+
+function AssetTypeBadge({ type }: { type?: string }) {
+  const label = ASSET_TYPE_LABEL[type ?? 'stock'] ?? '股票'
+  const tone = type === 'stock' || !type
+    ? 'border-line text-fg-muted'
+    : 'border-accent/40 text-accent'
+  return (
+    <span className={`rounded-full border px-1.5 py-px text-2xs ${tone}`}>{label}</span>
+  )
+}
+
+/** 标的详情链接：基金 → /fund/:thscode（净值/业绩/持仓），股票 → /stock/:tsCode */
+function DetailLink({ item, name, showCode = true }: { item: WatchlistItem; name: string | null; showCode?: boolean }) {
+  const isFund = (item.asset_type ?? 'stock').startsWith('fund')
+  const to = isFund ? `/fund/${encodeURIComponent(item.ts_code)}` : `/stock/${encodeURIComponent(item.ts_code)}`
+  const label = name || item.ts_code
+  return (
+    <Link
+      to={to}
+      title={`查看 ${label} ${isFund ? '基金' : '个股'}详情`}
+      className="group inline-flex items-baseline gap-1.5 rounded-sm transition-colors hover:text-accent"
+    >
+      {showCode ? <span className="num text-fg-muted group-hover:text-accent/80">{item.ts_code}</span> : null}
+      <span className={showCode ? 'text-fg-secondary' : undefined}>{name ?? ''}</span>
+      {!showCode && !name ? <span className="num">{item.ts_code}</span> : null}
+    </Link>
+  )
 }
 
 function Yi(amount: number | null | undefined): string {
@@ -86,10 +119,12 @@ export default function WatchlistPage() {
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['watchlist'] })
 
   const addMutation = useMutation({
-    mutationFn: async (raw: string) => {
+    mutationFn: async (payload: string | { code: string; assetType?: string }) => {
+      const raw = typeof payload === 'string' ? payload : payload.code
+      const assetType = typeof payload === 'string' ? undefined : payload.assetType
       const code = normalizeCode(raw)
-      if (!code) throw new Error('未识别代码：支持 6 位数字、600000.SH，或输入名称搜索')
-      await addWatchlistItem(code)
+      if (!code) throw new Error('未识别代码：支持 6 位数字、600000.SH、005827.OF，或输入名称搜索')
+      await addWatchlistItem(code, '', '', assetType)
       return code
     },
     onSuccess: invalidate,
@@ -108,22 +143,22 @@ export default function WatchlistPage() {
 
   const quotesQuery = useQuery({
     queryKey: ['market', 'watchlist', codes.join(',')],
-    queryFn: () => fetchQuotes(codes),
+    queryFn: () => fetchWatchlistQuotes(codes),
     refetchInterval: 5_000,
     enabled: codes.length > 0,
   })
 
-  // 名称/代码模糊搜索联想（直接输入完整代码时不查，走 normalizeCode 直加）
+  // 名称/代码模糊联想：裸 6 位码也查——代码可能是股票也可能是基金，
+  // 下拉让用户确认标的身份（515450 是上交所 ETF 而非深市股票）再点选
   const debouncedInput = useDebouncedValue(input, 300)
   const keyword = debouncedInput.trim()
-  const isDirectCode = Boolean(normalizeCode(keyword))
   const searchQuery = useQuery({
-    queryKey: ['market', 'ticker-search', keyword],
-    queryFn: () => fetchTickerSearch(keyword, 8),
-    enabled: keyword.length >= 2 && !isDirectCode,
+    queryKey: ['watchlist', 'search', keyword],
+    queryFn: () => fetchWatchlistSearch(keyword, 15),
+    enabled: keyword.length >= 2,
   })
   const suggestions = (searchQuery.data?.items ?? []).filter(
-    (item: TickerSearchItem) => item.ts_code && !codes.includes(item.ts_code),
+    (item: WatchlistSearchItem) => item.ts_code && !codes.includes(item.ts_code),
   )
 
   // 点击外部收起联想下拉
@@ -137,15 +172,29 @@ export default function WatchlistPage() {
     return () => document.removeEventListener('mousedown', onClickOutside)
   }, [])
 
-  const pickSuggestion = (item: TickerSearchItem) => {
+  const pickSuggestion = (item: WatchlistSearchItem) => {
     if (codes.includes(item.ts_code)) return
-    addMutation.mutate(item.ts_code, { onError: () => {} })
+    addMutation.mutate({ code: item.ts_code, assetType: item.asset_type }, { onError: () => {} })
     setInput('')
     setShowSuggestions(false)
   }
 
-  const quotes = quotesQuery.data?.quotes ?? {}
-  const rows = codes.map((code) => quotes[code]).filter(Boolean) as QuoteRow[]
+  const quotes: Record<string, WatchlistQuoteRow> = quotesQuery.data?.quotes ?? {}
+  const rows = codes.map((code) => quotes[code]).filter(Boolean) as WatchlistQuoteRow[]
+
+  /** 盘中越线高亮（决策5C）：当前价越过提醒线只变底色，不产生正式告警 */
+  const breachTone = (item: WatchlistItem): string => {
+    const q = quotes[item.ts_code]
+    const price = q?.last_price ?? q?.unit_nav ?? null
+    if (price === null || price === undefined) return ''
+    if (item.alert_high !== null && item.alert_high !== undefined && price >= item.alert_high) {
+      return 'bg-danger/8'
+    }
+    if (item.alert_low !== null && item.alert_low !== undefined && price <= item.alert_low) {
+      return 'bg-success/8'
+    }
+    return ''
+  }
 
   return (
     <div className="app-root min-h-full">
@@ -173,7 +222,7 @@ export default function WatchlistPage() {
                 setShowSuggestions(true)
               }}
               onFocus={() => setShowSuggestions(true)}
-              placeholder="代码或名称，如 600519 / 茅台"
+              placeholder="代码或名称，如 600519 / 515450 / 红利低波"
               className="num w-48 rounded-input border border-line bg-elevated/50 px-2 py-1 text-xs outline-none placeholder:text-fg-muted focus:border-accent/60"
             />
             <button
@@ -182,18 +231,18 @@ export default function WatchlistPage() {
             >
               <ListPlus size={12} /> 添加
             </button>
-            {showSuggestions && keyword.length >= 2 && !isDirectCode ? (
+            {showSuggestions && keyword.length >= 2 ? (
               <div className="absolute right-0 top-full z-20 mt-1 w-72 overflow-hidden rounded-card border border-line bg-surface shadow-lg">
                 {searchQuery.isLoading ? (
                   <div className="px-3 py-2 text-2xs text-fg-muted">搜索中…</div>
                 ) : suggestions.length === 0 ? (
                   <div className="px-3 py-2 text-2xs text-fg-muted">
-                    {searchQuery.isError ? '搜索失败，稍后再试' : '没有匹配的 A 股标的'}
+                    {searchQuery.isError ? '搜索失败，稍后再试' : '没有匹配的股票或基金'}
                   </div>
                 ) : (
-                  <ul className="max-h-64 overflow-y-auto py-1">
+                  <ul className="max-h-[22rem] overflow-y-auto py-1">
                     {suggestions.map((item) => (
-                      <li key={item.ts_code}>
+                      <li key={`${item.ts_code}-${item.asset_type}`}>
                         <button
                           type="button"
                           onClick={() => pickSuggestion(item)}
@@ -202,6 +251,7 @@ export default function WatchlistPage() {
                           <span className="flex items-center gap-2">
                             <Search size={11} className="text-fg-muted" />
                             <span>{item.name ?? item.ts_code}</span>
+                            <AssetTypeBadge type={item.asset_type} />
                           </span>
                           <span className="num text-2xs text-fg-muted">{item.ts_code}</span>
                         </button>
@@ -228,7 +278,7 @@ export default function WatchlistPage() {
             <EmptyState
               icon={<ListPlus size={22} />}
               title="还没有自选股"
-              description="在右上角输入 6 位代码或名称搜索添加，例如 600519（贵州茅台）、300750（宁德时代）。"
+              description="在右上角输入 6 位代码或名称搜索添加，股票如 600519（贵州茅台），ETF 如 515450（红利低波50ETF），场外基金用完整代码如 005827.OF。"
             />
           ) : quotesQuery.isLoading || listQuery.isLoading ? (
             <SkeletonRows rows={codes.length} />
@@ -238,6 +288,7 @@ export default function WatchlistPage() {
                 <tr className="border-b border-line text-left text-2xs text-fg-muted">
                   <th className="px-3 py-1.5 font-medium">代码</th>
                   <th className="px-3 py-1.5 font-medium">名称</th>
+                  <th className="px-3 py-1.5 font-medium">类型</th>
                   <th className="px-3 py-1.5 text-right font-medium">现价</th>
                   <th className="px-3 py-1.5 text-right font-medium">涨跌幅</th>
                   <th className="px-3 py-1.5 text-right font-medium">成交额</th>
@@ -249,16 +300,29 @@ export default function WatchlistPage() {
               </thead>
               <tbody>
                 {items.map((item) => {
-                  const row = quotes[item.ts_code] as QuoteRow | undefined
+                  const row = quotes[item.ts_code]
+                  const isOtc = item.asset_type === 'fund-otc'
+                  const price = row ? (isOtc ? row.unit_nav : row.last_price) : null
                   return (
-                    <tr key={item.ts_code} className="border-t border-line/60 hover:bg-elevated/50">
+                    <tr
+                      key={item.ts_code}
+                      className={`border-t border-line/60 hover:bg-elevated/50 ${breachTone(item)}`}
+                    >
                       <td className="px-3 py-1.5">
-                        <StockLink code={item.ts_code} name={row?.name ?? null} />
+                        <DetailLink item={item} name={row?.name ?? null} />
                       </td>
                       <td className="px-3 py-1.5 text-fg-secondary">
-                        <StockLink code={item.ts_code} name={row?.name ?? null} showCode={false} />
+                        <DetailLink item={item} name={row?.name ?? null} showCode={false} />
                       </td>
-                      <td className="num px-3 py-1.5 text-right">{row?.last_price ?? '--'}</td>
+                      <td className="px-3 py-1.5">
+                        <AssetTypeBadge type={item.asset_type} />
+                      </td>
+                      <td className="num px-3 py-1.5 text-right">
+                        {price ?? '--'}
+                        {isOtc && row?.nav_date ? (
+                          <span className="ml-1 text-2xs text-fg-muted">{row.nav_date}</span>
+                        ) : null}
+                      </td>
                       <td className="px-3 py-1.5 text-right">
                         <Delta value={row?.pct_chg ?? null} />
                       </td>
@@ -328,7 +392,7 @@ export default function WatchlistPage() {
                 })}
                 {rows.length < codes.length ? (
                   <tr className="border-t border-line/60">
-                    <td colSpan={9} className="px-3 py-2 text-2xs text-fg-muted">
+                    <td colSpan={10} className="px-3 py-2 text-2xs text-fg-muted">
                       有 {codes.length - rows.length} 只暂无行情（可能已退市或代码有误）
                     </td>
                   </tr>

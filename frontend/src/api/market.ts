@@ -322,6 +322,19 @@ export interface TickerSearchItem {
   exchange?: string
 }
 
+/** 自选联想候选：股票 + 基金（ETF/LOF/场外）合并，带资产类型（Issue 0001） */
+export interface WatchlistSearchItem extends TickerSearchItem {
+  asset_type?: 'stock' | 'fund-etf' | 'fund-lof' | 'fund-otc' | string
+}
+
+/** 自选行情行：股票为快照字段；场内基金同构；场外基金为 unit_nav + nav_date */
+export interface WatchlistQuoteRow extends Partial<QuoteRow> {
+  ts_code: string
+  asset_type?: 'stock' | 'fund-etf' | 'fund-lof' | 'fund-otc' | string
+  unit_nav?: number | null
+  nav_date?: string | null
+}
+
 function poolParams(date?: string, page = 1, size = 100) {
   // date input 产出 yyyy-MM-dd，后端池接口要求 YYYYMMDD，这里统一归一
   return { date: date ? date.replace(/-/g, '') : undefined, page, size }
@@ -467,6 +480,7 @@ export const fetchIndustryRotation = (refresh = false) =>
 
 export interface WatchlistItem {
   ts_code: string
+  asset_type?: 'stock' | 'fund-etf' | 'fund-lof' | 'fund-otc' | string
   group: string
   note: string
   alert_high: number | null
@@ -489,8 +503,23 @@ export const fetchWatchlist = () => apiGet<{ items: WatchlistItem[] }>('/trial/w
 export const replaceWatchlist = (items: Array<Partial<WatchlistItem> & { ts_code: string }>) =>
   apiPut<{ items: WatchlistItem[] }>('/trial/watchlist', { items })
 
-export const addWatchlistItem = (ts_code: string, group = '', note = '') =>
-  apiPost<{ item: WatchlistItem }>('/trial/watchlist', { ts_code, group, note })
+export const addWatchlistItem = (
+  ts_code: string,
+  group = '',
+  note = '',
+  asset_type?: WatchlistSearchItem['asset_type'],
+) => apiPost<{ item: WatchlistItem }>('/trial/watchlist', { ts_code, group, note, asset_type })
+
+/** 自选添加联想：股票+基金合并候选（区别于纯股票的 /market/ticker-search） */
+export const fetchWatchlistSearch = (q: string, limit = 8) =>
+  apiGet<{ query: string; items: WatchlistSearchItem[] }>('/trial/watchlist/search', { q, limit })
+
+/** 自选行情混合源：股票快照 + ETF/LOF 实时价 + 场外最新净值 */
+export const fetchWatchlistQuotes = (codes: string[]) =>
+  apiGet<{ quotes: Record<string, WatchlistQuoteRow>; updated_at: string | null }>(
+    '/trial/watchlist/quotes',
+    { codes: codes.join(',') },
+  )
 
 export const updateWatchlistItem = (ts_code: string, patch: Partial<WatchlistItem>) =>
   apiPut<{ item: WatchlistItem }>('/trial/watchlist/item', { ts_code, ...patch })

@@ -1,9 +1,12 @@
-"""试用功能只读 JSON API — 与对应 Flask 页面共用 trial_analytics / heatmap_service 的计算结果。"""
+"""试用功能 JSON API — 与对应 Flask 页面共用 trial_analytics / heatmap_service 的计算结果。"""
 from flask import jsonify, request
 from loguru import logger
 
 from app.api import api_bp
+from app.services.board_market_service import get_board_market_service
+from app.services.fund_service import get_fund_service
 from app.services.heatmap_service import HeatmapService
+from app.services.market_snapshot_service import get_market_snapshot_service
 from app.services.trial_analytics import (
     financial_health_payload,
     market_brief_payload,
@@ -141,18 +144,163 @@ def api_watchlist_put():
 
 @api_bp.route('/trial/watchlist', methods=['POST'])
 def api_watchlist_add():
-    """添加自选股。body: {ts_code, group?, note?}"""
+    """添加自选标的。body: {ts_code, group?, note?, asset_type?}
+
+    asset_type 缺省时服务端做「股票优先」消歧（裸码猜错后缀会被纠正）。
+    """
     try:
         from app.services.watchlist_service import WatchlistService
 
         payload = request.get_json(silent=True) or {}
         item = WatchlistService().add_item(
-            payload.get('ts_code', ''), payload.get('group') or '', payload.get('note') or '')
+            payload.get('ts_code', ''), payload.get('group') or '', payload.get('note') or '',
+            asset_type=payload.get('asset_type'))
         return _ok({'item': item})
     except ValueError as e:
         return jsonify({'code': 400, 'message': str(e), 'data': None}), 400
     except Exception as e:
-        return _error('添加自选股', e)
+        return _error('添加自选标的', e)
+
+
+@api_bp.route('/trial/watchlist/search', methods=['GET'])
+def api_watchlist_search():
+    """自选添加联想：A 股 + 基金（ETF/LOF/场外）合并候选，带 asset_type。
+
+    只服务自选页；/api/market/ticker-search（选股/回测共用）保持纯股票，
+    避免回测标的选择器混入无 Parquet 数据的基金（Issue 0001 决策4）。
+    """
+    query = (request.args.get('q') or '').strip()
+    if len(query) < 2:
+        return jsonify({'code': 400, 'message': 'q 参数至少 2 个字符', 'data': None}), 400
+    try:
+        limit = min(20, max(1, int(request.args.get('limit', 10))))
+    except ValueError:
+        return jsonify({'code': 400, 'message': 'limit 须为整数', 'data': None}), 400
+
+    items = []
+    try:
+        stock_payload = get_board_market_service().search_tickers(query, limit=limit)
+        for row in stock_payload.get('items') or []:
+            items.append({**row, 'asset_type': 'stock'})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"自选联想-股票侧失败: {exc}")
+    try:
+        for row in get_fund_service().search_funds(query, limit=limit):
+            items.append({
+                'ts_code': row.get('thscode'),
+                'ticker': row.get('ticker'),
+                'name': row.get('name'),
+                'exchange': row.get('exchange'),
+                'asset_type': row.get('asset_type'),
+            })
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"自选联想-基金侧失败: {exc}")
+    items = items[:limit]
+    return _ok({'query': query, 'items': items})
+
+
+@api_bp.route('/trial/watchlist/quotes', methods=['GET'])
+def api_watchlist_quotes():
+    """自选行情混合源：股票走扶摇快照，ETF/LOF 走基金实时价，场外用最新净值。
+
+    取不到价的代码从结果省略（不造假），前端按缺省渲染 '--'。
+    """
+    codes = _parse_ts_codes(request.args.get('codes'))
+    if not codes:
+        return jsonify({'code': 400, 'message': '缺少 codes 参数（逗号分隔）', 'data': None}), 400
+
+    def _looks_like_fund(code: str) -> bool:
+        upper = code.upper()
+        if upper.endswith('.OF'):
+            return True
+        # 沪市 5 开头为基金区间（股票是 60/68）；深市 15/16/18 为基金区间
+        if upper.endswith('.SH') and upper.startswith('5'):
+            return True
+        if upper.endswith('.SZ') and upper[:2] in ('15', '16', '18'):
+            return True
+        return False
+
+    fund_codes = [c for c in codes if _looks_like_fund(c)]
+    stock_codes = [c for c in codes if c not in fund_codes]
+
+    quotes = {}
+    if stock_codes:
+        try:
+            stock_quotes = get_market_snapshot_service().get_quotes(stock_codes)
+            for code, row in stock_quotes.items():
+                quotes[code] = {**row, 'asset_type': row.get('asset_type') or 'stock'}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"自选行情-股票快照失败: {exc}")
+
+    fund_service = get_fund_service()
+
+    def _fund_name(code: str):
+        # 基金快照不返回名称；profile 服务层缓存 600s，逐只补全可接受
+        try:
+            return (fund_service.get_profile(code) or {}).get('fund_name')
+        except Exception:  # noqa: BLE001
+            return None
+
+    for code in fund_codes:
+        bare_type = 'fund-otc' if code.upper().endswith('.OF') else None
+        try:
+            if bare_type == 'fund-otc':
+                rows = fund_service.get_nav_series(code) or []
+                dated = [r for r in rows if r.get('nav_date_ymd')]
+                if not dated:
+                    continue
+                latest = max(dated, key=lambda r: str(r.get('nav_date_ymd')))
+                quotes[code] = {
+                    'ts_code': code,
+                    'asset_type': 'fund-otc',
+                    'name': _fund_name(code),
+                    'unit_nav': latest.get('unit_nav'),
+                    'nav_date': _ymd_dash(latest.get('nav_date_ymd')),
+                }
+                continue
+            snap = fund_service.get_snapshot(code)
+            if snap:
+                quotes[code] = {
+                    'ts_code': code,
+                    'asset_type': bare_type or ('fund-etf' if code.upper().startswith('5')
+                                                else 'fund-lof'),
+                    'name': snap.get('fund_name') or snap.get('name') or _fund_name(code),
+                    'last_price': snap.get('last_price'),
+                    'prev_close': snap.get('prev_price'),
+                    'pct_chg': snap.get('price_change_ratio_pct'),
+                    'open': snap.get('open_price'),
+                    'high': snap.get('high_price'),
+                    'low': snap.get('low_price'),
+                    'volume': snap.get('volume'),
+                    'turnover': snap.get('turnover'),
+                }
+                continue
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"自选行情-基金失败({code}): {exc}")
+        # 场内快照失败（如 LOF 无行情）→ 净值兜底
+        try:
+            rows = fund_service.get_nav_series(code) or []
+            dated = [r for r in rows if r.get('nav_date_ymd')]
+            if dated:
+                latest = max(dated, key=lambda r: str(r.get('nav_date_ymd')))
+                quotes[code] = {
+                    'ts_code': code,
+                    'asset_type': bare_type or 'fund-lof',
+                    'name': _fund_name(code),
+                    'unit_nav': latest.get('unit_nav'),
+                    'nav_date': _ymd_dash(latest.get('nav_date_ymd')),
+                }
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"自选行情-基金净值兜底失败({code}): {exc}")
+
+    return _ok({'quotes': quotes, 'updated_at': None})
+
+
+def _ymd_dash(ymd):
+    text = str(ymd or '')
+    if len(text) == 8 and text.isdigit():
+        return f'{text[:4]}-{text[4:6]}-{text[6:8]}'
+    return text or None
 
 
 @api_bp.route('/trial/watchlist/item', methods=['PUT'])
